@@ -1,0 +1,598 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>WhatsApp Bulk Message Sender (Standalone)</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+  <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800;900&family=JetBrains+Mono:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+  <style>
+    body {
+      font-family: 'Plus Jakarta Sans', system-ui, sans-serif;
+    }
+    code, pre, .font-mono {
+      font-family: 'JetBrains Mono', monospace;
+    }
+    @keyframes button-glow {
+      0%, 100% {
+        box-shadow: 0 10px 25px -5px rgba(16, 185, 129, 0.4), 0 8px 10px -6px rgba(16, 185, 129, 0.4);
+      }
+      50% {
+        box-shadow: 0 20px 35px -5px rgba(16, 185, 129, 0.6), 0 10px 15px -5px rgba(16, 185, 129, 0.5);
+      }
+    }
+    .animate-button-glow {
+      animation: button-glow 3s ease-in-out infinite;
+    }
+    .wa-chat-bg {
+      background-color: #efeae2;
+      background-image: radial-gradient(rgba(0, 0, 0, 0.07) 1px, transparent 0);
+      background-size: 20px 20px;
+    }
+  </style>
+</head>
+<body class="bg-gradient-to-br from-slate-50 via-white to-emerald-50/30 text-slate-800 min-h-screen">
+  <div id="root"></div>
+
+  <script type="text/babel">
+    const { useState, useEffect, useMemo, useRef } = React;
+
+    function parseAndValidateNumbers(rawText, defaultCountryCode = '91') {
+      if (!rawText || !rawText.trim()) {
+        return { items: [], validList: [], stats: { total: 0, valid: 0, duplicates: 0, invalid: 0 } };
+      }
+      const rawTokens = rawText.split(/[\r\n,;| \t]+/).map(t => t.trim()).filter(Boolean);
+      const cleanPrefix = (defaultCountryCode || '91').replace(/\D/g, '');
+      const seen = new Set();
+      let duplicates = 0, invalid = 0, valid = 0;
+      const items = [];
+      const validList = [];
+
+      rawTokens.forEach((raw, i) => {
+        let digits = raw.replace(/\D/g, '');
+        if (digits.startsWith('0') && digits.length > 10) digits = digits.replace(/^0+/, '');
+
+        let finalNum = digits;
+        let isValid = false;
+
+        if (digits.length === 10) {
+          finalNum = cleanPrefix + digits;
+          isValid = true;
+        } else if (digits.length >= 11 && digits.length <= 15) {
+          if (digits.startsWith('0')) digits = digits.replace(/^0+/, '');
+          if (digits.length === 10) {
+            finalNum = cleanPrefix + digits;
+            isValid = true;
+          } else if (digits.length >= 11 && digits.length <= 15) {
+            finalNum = digits;
+            isValid = true;
+          }
+        }
+
+        if (!isValid) {
+          invalid++;
+          items.push({ id: `item-${i}`, raw, cleaned: finalNum, formatted: raw, isValid: false, isDuplicate: false, status: 'pending' });
+          return;
+        }
+
+        const formatted = finalNum.length === 12 && finalNum.startsWith('91')
+          ? `+91 ${finalNum.slice(2, 7)} ${finalNum.slice(7)}`
+          : `+${finalNum}`;
+
+        if (seen.has(finalNum)) {
+          duplicates++;
+          items.push({ id: `item-${i}`, raw, cleaned: finalNum, formatted, isValid: true, isDuplicate: true, status: 'pending' });
+        } else {
+          seen.add(finalNum);
+          valid++;
+          const obj = { id: `item-${i}`, raw, cleaned: finalNum, formatted, isValid: true, isDuplicate: false, status: 'pending' };
+          items.push(obj);
+          validList.push(obj);
+        }
+      });
+
+      return { items, validList, stats: { total: rawTokens.length, valid, duplicates, invalid } };
+    }
+
+    function exportToCSV(contacts) {
+      if (!contacts || contacts.length === 0) return alert('No contacts in queue to export.');
+      const headers = ['Sr No', 'Phone Number', 'Raw Number', 'Status', 'Date', 'Time'];
+      const rows = contacts.map((c, i) => {
+        let dStr = '-', tStr = '-';
+        if (c.sentAt) {
+          const d = new Date(c.sentAt);
+          if (!isNaN(d.getTime())) {
+            dStr = d.toLocaleDateString();
+            tStr = d.toLocaleTimeString();
+          }
+        }
+        return [i + 1, `="${c.cleaned}"`, `"${(c.raw || c.cleaned).replace(/"/g, '""')}"`, c.status.toUpperCase(), dStr, tStr];
+      });
+
+      const csv = [headers.join(','), ...rows.map(r => r.join(','))].join('\r\n');
+      const blob = new Blob(['\uFEFF' + csv], { type: 'text/csv;charset=utf-8;' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `whatsapp-bulk-dispatch-${new Date().toISOString().slice(0, 10)}.csv`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+    }
+
+    function App() {
+      const [countryCode, setCountryCode] = useState(() => localStorage.getItem('wa_country_code') || '91');
+      const [delaySeconds, setDelaySeconds] = useState(() => Number(localStorage.getItem('wa_delay_seconds') || 5));
+      const [isDesktopApp, setIsDesktopApp] = useState(() => localStorage.getItem('wa_is_desktop_app') === 'true');
+      const [rawInput, setRawInput] = useState(() => localStorage.getItem('wa_raw_input') || '');
+      const [message, setMessage] = useState(() => localStorage.getItem('wa_message') || 'Hello! ✨\n\nExclusive announcement for you: 📢\nVisit: https://example.com\n\nFeel free to reply! 💬');
+      const [queue, setQueue] = useState(() => {
+        try { return JSON.parse(localStorage.getItem('wa_queue')) || []; } catch { return []; }
+      });
+      const [currentIndex, setCurrentIndex] = useState(() => Number(localStorage.getItem('wa_current_index') || 0));
+      const [filter, setFilter] = useState('all');
+      const [searchQuery, setSearchQuery] = useState('');
+      const [isAutoSending, setIsAutoSending] = useState(false);
+      const [countdown, setCountdown] = useState(0);
+      const [popupBlocked, setPopupBlocked] = useState(false);
+
+      const queueRef = useRef(queue);
+      queueRef.current = queue;
+
+      const currentIndexRef = useRef(currentIndex);
+      currentIndexRef.current = currentIndex;
+
+      const autoWindowRef = useRef(null);
+      const timerRef = useRef(null);
+
+      useEffect(() => { localStorage.setItem('wa_country_code', countryCode); }, [countryCode]);
+      useEffect(() => { localStorage.setItem('wa_delay_seconds', String(delaySeconds)); }, [delaySeconds]);
+      useEffect(() => { localStorage.setItem('wa_is_desktop_app', String(isDesktopApp)); }, [isDesktopApp]);
+      useEffect(() => { localStorage.setItem('wa_raw_input', rawInput); }, [rawInput]);
+      useEffect(() => { localStorage.setItem('wa_message', message); }, [message]);
+      useEffect(() => { localStorage.setItem('wa_queue', JSON.stringify(queue)); }, [queue]);
+      useEffect(() => { localStorage.setItem('wa_current_index', String(currentIndex)); }, [currentIndex]);
+
+      const cleaned = useMemo(() => parseAndValidateNumbers(rawInput, countryCode), [rawInput, countryCode]);
+
+      const sentCount = queue.filter(q => q.status === 'sent').length;
+      const skippedCount = queue.filter(q => q.status === 'skipped').length;
+      const pendingCount = queue.filter(q => q.status === 'pending').length;
+      const progressPercent = queue.length > 0 ? Math.round((sentCount / queue.length) * 100) : 0;
+      const currentContact = queue[currentIndex] || null;
+
+      const handleApplyQueue = () => {
+        if (cleaned.validList.length === 0) return;
+        setQueue(cleaned.validList);
+        setCurrentIndex(0);
+      };
+
+      const sendContactByIndex = (idx) => {
+        const currentQ = queueRef.current;
+        if (idx < 0 || idx >= currentQ.length) return false;
+        const c = currentQ[idx];
+        const base = isDesktopApp ? 'https://api.whatsapp.com/send' : 'https://web.whatsapp.com/send';
+        const url = `${base}?phone=${c.cleaned}&text=${encodeURIComponent(message)}`;
+
+        let win = null;
+        try {
+          if (autoWindowRef.current && !autoWindowRef.current.closed) {
+            autoWindowRef.current.location.href = url;
+            autoWindowRef.current.focus();
+            win = autoWindowRef.current;
+          } else {
+            win = window.open(url, 'WhatsAppBulkSenderWindow');
+            if (win) autoWindowRef.current = win;
+          }
+
+          if (!win || win.closed || typeof win.closed === 'undefined') {
+            setPopupBlocked(true);
+            setIsAutoSending(false);
+            return false;
+          } else {
+            setPopupBlocked(false);
+          }
+        } catch (e) {
+          setPopupBlocked(true);
+          setIsAutoSending(false);
+          return false;
+        }
+
+        const upd = [...currentQ];
+        upd[idx] = { ...upd[idx], status: 'sent', sentAt: new Date().toISOString() };
+        setQueue(upd);
+
+        const nextPending = upd.findIndex((item, i) => i > idx && item.status === 'pending');
+        if (nextPending !== -1) {
+          setCurrentIndex(nextPending);
+        } else {
+          const first = upd.findIndex(item => item.status === 'pending');
+          if (first !== -1) setCurrentIndex(first);
+          else setIsAutoSending(false);
+        }
+        return true;
+      };
+
+      const handleToggleAutoTimer = () => {
+        if (isAutoSending) {
+          setIsAutoSending(false);
+          if (timerRef.current) clearInterval(timerRef.current);
+          setCountdown(0);
+          return;
+        }
+
+        if (pendingCount === 0) return alert('No pending contacts.');
+
+        let targetIndex = currentIndexRef.current;
+        const currentQ = queueRef.current;
+        if (!currentQ[targetIndex] || currentQ[targetIndex].status !== 'pending') {
+          const firstPending = currentQ.findIndex(item => item.status === 'pending');
+          if (firstPending !== -1) targetIndex = firstPending;
+        }
+
+        const ok = sendContactByIndex(targetIndex);
+        if (!ok) return;
+
+        setIsAutoSending(true);
+        setCountdown(delaySeconds);
+      };
+
+      useEffect(() => {
+        if (!isAutoSending) {
+          if (timerRef.current) clearInterval(timerRef.current);
+          setCountdown(0);
+          return;
+        }
+
+        if (pendingCount === 0) {
+          setIsAutoSending(false);
+          return;
+        }
+
+        setCountdown(delaySeconds);
+        timerRef.current = setInterval(() => {
+          setCountdown((prev) => {
+            if (prev <= 1) {
+              const currentQ = queueRef.current;
+              let nextTarget = currentIndexRef.current;
+              if (!currentQ[nextTarget] || currentQ[nextTarget].status !== 'pending') {
+                nextTarget = currentQ.findIndex(item => item.status === 'pending');
+              }
+              if (nextTarget !== -1) {
+                sendContactByIndex(nextTarget);
+              } else {
+                setIsAutoSending(false);
+              }
+              return delaySeconds;
+            }
+            return prev - 1;
+          });
+        }, 1000);
+
+        return () => {
+          if (timerRef.current) clearInterval(timerRef.current);
+        };
+      }, [isAutoSending, delaySeconds, pendingCount]);
+
+      const handleSkip = () => {
+        const idx = currentIndexRef.current;
+        const currentQ = queueRef.current;
+        if (idx < 0 || idx >= currentQ.length) return;
+        const upd = [...currentQ];
+        upd[idx] = { ...upd[idx], status: 'skipped' };
+        setQueue(upd);
+
+        const nextPending = upd.findIndex((item, i) => i > idx && item.status === 'pending');
+        if (nextPending !== -1) setCurrentIndex(nextPending);
+      };
+
+      useEffect(() => {
+        const onKey = (e) => {
+          if (['textarea', 'input'].includes(e.target.tagName.toLowerCase())) return;
+          if (e.code === 'Space' || e.key === 'Enter') {
+            e.preventDefault();
+            sendContactByIndex(currentIndexRef.current);
+          } else if (e.key === 's' || e.key === 'S') {
+            e.preventDefault();
+            handleSkip();
+          }
+        };
+        window.addEventListener('keydown', onKey);
+        return () => window.removeEventListener('keydown', onKey);
+      }, []);
+
+      const filteredQueue = queue.filter(item => {
+        if (filter !== 'all' && item.status !== filter) return false;
+        if (searchQuery && !item.cleaned.includes(searchQuery)) return false;
+        return true;
+      });
+
+      return (
+        <div className="max-w-7xl mx-auto px-4 sm:px-6 py-6 space-y-6">
+          
+          {popupBlocked && (
+            <div className="bg-rose-100 border-2 border-rose-500 rounded-2xl p-4 text-xs font-black text-rose-950 flex justify-between items-center">
+              <span>⚠️ Safari/Browser ne WhatsApp window block ki hai. Safari Address bar mein "Allow Popups" karein!</span>
+              <button onClick={() => {
+                const w = window.open('https://web.whatsapp.com', 'WhatsAppBulkSenderWindow');
+                if (w) { autoWindowRef.current = w; setPopupBlocked(false); }
+              }} className="bg-rose-600 text-white px-3 py-1.5 rounded-xl">Allow Popups</button>
+            </div>
+          )}
+
+          {/* Header */}
+          <header className="bg-white border-2 border-emerald-100 rounded-3xl p-4 sm:p-5 flex flex-col md:flex-row md:items-center justify-between gap-4 shadow-sm">
+            <div className="flex items-center gap-3">
+              <div className="w-12 h-12 rounded-2xl bg-gradient-to-tr from-emerald-600 via-teal-500 to-cyan-500 flex items-center justify-center text-2xl shadow-lg shadow-emerald-500/30 text-white">💬</div>
+              <div>
+                <h1 className="text-xl sm:text-2xl font-black text-slate-900 flex items-center gap-2">
+                  WhatsApp <span className="text-emerald-600">Bulk Sender</span>
+                  <span className="text-xs font-black bg-emerald-500 text-white px-3 py-0.5 rounded-full shadow-xs">
+                    100% FREE
+                  </span>
+                </h1>
+                <p className="text-xs text-slate-600 font-bold">Zero API Key Needed • Direct Web Automation • Anti-Ban Safe</p>
+              </div>
+            </div>
+
+            <div className="flex flex-wrap items-center gap-2.5 text-xs">
+              <div className="bg-emerald-50 border-2 border-emerald-200 px-3 py-1.5 rounded-xl flex items-center gap-2 shadow-2xs">
+                <span className="text-emerald-950 font-black">Prefix:</span>
+                <select value={countryCode} onChange={e => setCountryCode(e.target.value)} className="bg-transparent text-emerald-800 font-black focus:outline-none cursor-pointer">
+                  <option value="91" className="bg-white">🇮🇳 India (+91)</option>
+                  <option value="1" className="bg-white">🇺🇸 USA/Canada (+1)</option>
+                  <option value="44" className="bg-white">🇬🇧 UK (+44)</option>
+                  <option value="971" className="bg-white">🇦🇪 UAE (+971)</option>
+                  <option value="966" className="bg-white">🇸🇦 Saudi (+966)</option>
+                  <option value="61" className="bg-white">🇦🇺 Australia (+61)</option>
+                </select>
+              </div>
+
+              <div className="bg-amber-50 border-2 border-amber-200 px-3 py-1.5 rounded-xl flex items-center gap-2 shadow-2xs">
+                <span className="text-amber-950 font-black">Delay:</span>
+                <select value={delaySeconds} onChange={e => setDelaySeconds(Number(e.target.value))} className="bg-transparent text-amber-800 font-black focus:outline-none cursor-pointer">
+                  <option value={3} className="bg-white">3s</option>
+                  <option value={5} className="bg-white">5s (Safe)</option>
+                  <option value={8} className="bg-white">8s</option>
+                  <option value={10} className="bg-white">10s (Anti-Ban)</option>
+                </select>
+              </div>
+
+              <div className="bg-slate-100 p-1 rounded-xl border-2 border-slate-200 flex gap-1">
+                <button onClick={() => setIsDesktopApp(false)} className={`px-3 py-1 rounded-lg font-black ${!isDesktopApp ? 'bg-emerald-600 text-white shadow-xs' : 'text-slate-700'}`}>Web</button>
+                <button onClick={() => setIsDesktopApp(true)} className={`px-3 py-1 rounded-lg font-black ${isDesktopApp ? 'bg-emerald-600 text-white shadow-xs' : 'text-slate-700'}`}>App</button>
+              </div>
+            </div>
+          </header>
+
+          {/* Row 1: Numbers + Composer + Chat Preview */}
+          <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
+            
+            {/* Numbers Panel */}
+            <div className="lg:col-span-4 bg-white border-2 border-slate-200 rounded-3xl p-5 sm:p-6 shadow-xl flex flex-col">
+              <div className="flex items-center justify-between pb-3.5 border-b-2 border-slate-100 mb-3">
+                <h2 className="text-base font-black text-slate-900">1. Numbers Input Panel</h2>
+                <div className="flex gap-1.5 text-xs">
+                  <button onClick={() => setRawInput("9876543210\n+91 98765 43211\n9876543212, 9876543213\n09876543214\n9876543210\n12345")} className="px-3 py-1.5 bg-gradient-to-r from-amber-500 to-orange-500 text-white font-black rounded-xl shadow-xs">Sample 5</button>
+                  <button onClick={() => setRawInput('')} className="px-2.5 py-1.5 bg-rose-100 text-rose-700 font-black rounded-xl">Clear</button>
+                </div>
+              </div>
+
+              <textarea
+                value={rawInput}
+                onChange={e => setRawInput(e.target.value)}
+                placeholder="Paste numbers here (separated by comma, spaces, or lines)...&#10;10-digit numbers automatically get prefix +91"
+                className="w-full h-36 bg-slate-50 border-2 border-slate-300 rounded-2xl p-3 text-xs font-mono font-bold text-slate-900 focus:outline-none focus:border-emerald-600 shadow-inner"
+              />
+
+              {/* Counters */}
+              <div className="grid grid-cols-4 gap-2 my-3 text-center font-black">
+                <div className="bg-slate-100 p-2 rounded-2xl border-2 border-slate-200">
+                  <div className="text-[10px] text-slate-500 uppercase">Total</div>
+                  <div className="text-base text-slate-900">{cleaned.stats.total}</div>
+                </div>
+                <div className="bg-emerald-50 p-2 rounded-2xl border-2 border-emerald-400 text-emerald-800">
+                  <div className="text-[10px] uppercase">Valid</div>
+                  <div className="text-base text-emerald-700">{cleaned.stats.valid}</div>
+                </div>
+                <div className="bg-amber-50 p-2 rounded-2xl border-2 border-amber-400 text-amber-800">
+                  <div className="text-[10px] uppercase">Duplicates</div>
+                  <div className="text-base text-amber-700">-{cleaned.stats.duplicates}</div>
+                </div>
+                <div className="bg-rose-50 p-2 rounded-2xl border-2 border-rose-400 text-rose-800">
+                  <div className="text-[10px] uppercase">Invalid</div>
+                  <div className="text-base text-rose-700">{cleaned.stats.invalid}</div>
+                </div>
+              </div>
+
+              <button
+                onClick={handleApplyQueue}
+                disabled={cleaned.stats.valid === 0}
+                className="w-full mt-auto py-3.5 bg-gradient-to-r from-emerald-600 via-teal-600 to-emerald-500 hover:from-emerald-500 hover:to-teal-500 text-white rounded-2xl font-black text-sm shadow-xl shadow-emerald-500/30 disabled:opacity-40 cursor-pointer"
+              >
+                Sync {cleaned.stats.valid} Valid Contacts into Queue ➔
+              </button>
+            </div>
+
+            {/* Message Composer */}
+            <div className="lg:col-span-4 bg-white border-2 border-slate-200 rounded-3xl p-5 sm:p-6 shadow-xl flex flex-col">
+              <div className="flex items-center justify-between pb-3.5 border-b-2 border-slate-100 mb-3">
+                <h2 className="text-base font-black text-slate-900">2. Message Composer</h2>
+                <div className="text-xs font-black bg-slate-100 px-2 py-0.5 rounded-lg border border-slate-200">Chars: <strong className="text-emerald-700">{message.length}</strong></div>
+              </div>
+
+              {/* Emoji bar */}
+              <div className="flex items-center gap-1.5 mb-2 overflow-x-auto py-1">
+                {['✨', '📢', '🔥', '📞', '💬', '🚀', '🎁', '✅', '⚠️', '🕒', '🛒'].map(emoji => (
+                  <button key={emoji} onClick={() => setMessage(m => m + emoji)} className="hover:scale-130 transition-transform text-lg">{emoji}</button>
+                ))}
+              </div>
+
+              <textarea
+                value={message}
+                onChange={e => setMessage(e.target.value)}
+                placeholder="Compose your broadcast message..."
+                className="w-full h-44 bg-slate-50 border-2 border-slate-300 rounded-2xl p-3 text-xs sm:text-sm font-semibold text-slate-900 focus:outline-none focus:border-emerald-600 leading-relaxed shadow-inner"
+              />
+
+              <div className="text-xs text-slate-600 font-bold mt-2.5">
+                Support *bold*, _italic_, ~strike~ &amp; multi-line breaks.
+              </div>
+            </div>
+
+            {/* Live WhatsApp Chat Preview */}
+            <div className="lg:col-span-4 bg-white border-2 border-slate-200 rounded-3xl p-5 sm:p-6 shadow-xl flex flex-col items-center">
+              <h2 className="text-base font-black text-slate-900 self-start pb-3.5 border-b-2 border-slate-100 w-full mb-3">
+                Live WhatsApp Chat Preview
+              </h2>
+
+              <div className="w-full max-w-[280px] bg-slate-900 rounded-[30px] border-[5px] border-slate-800 overflow-hidden flex flex-col shadow-2xl">
+                <div className="bg-[#008069] text-white p-3 flex items-center justify-between shadow-md">
+                  <div className="flex items-center gap-2">
+                    <div className="w-7 h-7 rounded-full bg-white/20 flex items-center justify-center text-xs font-bold">👤</div>
+                    <div className="text-xs font-black truncate">{currentContact ? currentContact.formatted : 'Recipient'}</div>
+                  </div>
+                </div>
+
+                <div className="wa-chat-bg p-3 min-h-[200px] flex flex-col justify-end">
+                  <div className="bg-[#d9fdd3] text-[#111b21] rounded-2xl rounded-tr-none px-3 py-2 text-xs shadow-md self-end max-w-[90%] whitespace-pre-wrap break-words border border-emerald-200">
+                    {message || 'Type message in step 2...'}
+                    <div className="text-[10px] text-slate-500 font-black text-right mt-1">✓✓</div>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+          </div>
+
+          {/* Row 2: Dispatch & Queue System */}
+          <div className="bg-white border-2 border-slate-200 rounded-3xl p-6 sm:p-7 shadow-xl">
+            <div className="flex flex-col sm:flex-row items-center justify-between pb-4 border-b-2 border-slate-100 gap-3">
+              <div>
+                <h2 className="text-lg font-black text-slate-900">3. Dispatch &amp; Smart Queue System</h2>
+                <p className="text-xs text-slate-600 font-bold">1-Click Launch • Space/Enter Shortcut • Auto Progress</p>
+              </div>
+
+              <div className="flex items-center gap-2">
+                <button
+                  onClick={() => {
+                    if (confirm('Reset queue back to Pending?')) {
+                      setQueue(queue.map(q => ({ ...q, status: 'pending', sentAt: undefined })));
+                      setCurrentIndex(0);
+                    }
+                  }}
+                  className="px-3.5 py-2 bg-slate-100 text-slate-800 font-black rounded-xl text-xs border border-slate-200 shadow-xs"
+                >
+                  Reset Queue
+                </button>
+                <button
+                  onClick={() => exportToCSV(queue)}
+                  className="px-4 py-2 bg-gradient-to-r from-emerald-600 to-teal-600 text-white rounded-xl text-xs font-black shadow-md shadow-emerald-500/25"
+                >
+                  Export CSV Report
+                </button>
+              </div>
+            </div>
+
+            {/* Progress bar */}
+            <div className="my-5 bg-gradient-to-r from-slate-50 to-emerald-50 border-2 border-slate-200 p-4 rounded-2xl">
+              <div className="flex justify-between text-xs mb-2 font-black">
+                <span className="text-emerald-700">Progress: {sentCount} / {queue.length} Contacts ({progressPercent}%)</span>
+                <span className="text-slate-600">Pending: {pendingCount} | Skipped: {skippedCount}</span>
+              </div>
+              <div className="w-full bg-slate-200 h-3 rounded-full overflow-hidden">
+                <div className="bg-gradient-to-r from-emerald-500 to-teal-400 h-full rounded-full transition-all" style={{ width: `${progressPercent}%` }}></div>
+              </div>
+            </div>
+
+            {/* Big Action Console */}
+            <div className="bg-gradient-to-r from-emerald-50 via-teal-50 to-cyan-50 border-2 border-emerald-300 rounded-3xl p-5 sm:p-6 flex flex-col md:flex-row items-center justify-between gap-5 mb-5 shadow-md">
+              <div>
+                <div className="text-xs text-slate-600 font-black uppercase">Active Target: #{currentContact ? currentIndex + 1 : '--'}</div>
+                <div className="text-2xl sm:text-3xl font-black font-mono text-slate-900">{currentContact ? currentContact.formatted : 'Queue Empty'}</div>
+                <div className="text-xs text-slate-600 font-bold mt-1">Press Spacebar or Enter to send next</div>
+              </div>
+
+              <div className="flex items-center gap-3">
+                <button
+                  onClick={handleToggleAutoTimer}
+                  disabled={pendingCount === 0}
+                  className={`px-4 py-3 rounded-2xl text-xs font-black shadow-md ${isAutoSending ? 'bg-amber-500 text-slate-950 animate-pulse' : 'bg-white border-2 border-amber-300 text-amber-900'}`}
+                >
+                  {isAutoSending ? `Timer (${countdown}s)` : 'Auto-Timer'}
+                </button>
+                <button
+                  onClick={handleSkip}
+                  disabled={!currentContact}
+                  className="px-4 py-3 bg-white hover:bg-slate-100 border-2 border-slate-300 text-slate-800 rounded-2xl text-xs sm:text-sm font-black shadow-md cursor-pointer"
+                >
+                  Skip (S)
+                </button>
+                <button
+                  onClick={() => sendContactByIndex(currentIndexRef.current)}
+                  disabled={!currentContact}
+                  className="px-8 sm:px-10 py-3.5 bg-gradient-to-r from-emerald-600 via-teal-600 to-emerald-500 text-white font-black rounded-2xl text-base sm:text-lg shadow-xl shadow-emerald-500/40 animate-button-glow cursor-pointer"
+                >
+                  Send Next ↵
+                </button>
+              </div>
+            </div>
+
+            {/* Queue Table */}
+            <div className="max-h-64 overflow-y-auto border-2 border-slate-200 rounded-2xl">
+              <table className="w-full text-xs text-left font-bold">
+                <thead className="bg-slate-100 text-slate-700 font-black border-b-2 border-slate-200 sticky top-0">
+                  <tr>
+                    <th className="p-3 w-12 text-center">#</th>
+                    <th className="p-3">Phone Number</th>
+                    <th className="p-3 w-28 text-center">Status</th>
+                    <th className="p-3 text-right">Action</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-100">
+                  {filteredQueue.map((item, idx) => (
+                    <tr key={item.id} className={queue.indexOf(item) === currentIndex ? 'bg-emerald-50/90 border-l-4 border-emerald-600' : ''}>
+                      <td className="p-3 text-center text-slate-500 font-mono font-black">{queue.indexOf(item) + 1}</td>
+                      <td className="p-3 font-mono font-black text-slate-900 text-sm">{item.formatted}</td>
+                      <td className="p-3 text-center">
+                        <span className={`px-3 py-1 rounded-full text-xs font-black border ${
+                          item.status === 'sent' ? 'bg-emerald-100 text-emerald-900 border-emerald-400' :
+                          item.status === 'skipped' ? 'bg-slate-100 text-slate-700 border-slate-300' :
+                          'bg-amber-100 text-amber-900 border-amber-400'
+                        }`}>
+                          {item.status.toUpperCase()}
+                        </span>
+                      </td>
+                      <td className="p-3 text-right">
+                        <button
+                          onClick={() => {
+                            setCurrentIndex(queue.indexOf(item));
+                            sendContactByIndex(queue.indexOf(item));
+                          }}
+                          className="px-3 py-1 bg-emerald-50 text-emerald-700 hover:bg-emerald-600 hover:text-white border border-emerald-300 rounded-xl text-xs font-black shadow-2xs"
+                        >
+                          Send ➔
+                        </button>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+
+          </div>
+
+        </div>
+      );
+    }
+
+    ReactDOM.createRoot(document.getElementById('root')).render(<App />);
+  </script>
+</body>
+</html>
