@@ -31,9 +31,10 @@ export default function DirectBotModal({
   });
   const [loading, setLoading] = useState(false);
   const [refreshingQR, setRefreshingQR] = useState(false);
-  const API_BASE = typeof window !== 'undefined' && window.location.port === '3001' ? '' : 'http://localhost:3001';
+  const [serverError, setServerError] = useState(false);
+  const API_BASE = '';
 
-  // Poll status from server every 1 second
+  // Poll status from server every 1.5 seconds
   useEffect(() => {
     if (!isOpen) return;
 
@@ -43,14 +44,18 @@ export default function DirectBotModal({
         if (res.ok) {
           const data = await res.json();
           setStatus(data);
+          setServerError(false);
+        } else {
+          setServerError(true);
         }
       } catch (err) {
+        setServerError(true);
         console.warn('Direct engine server not responding:', err);
       }
     };
 
     fetchStatus();
-    const interval = setInterval(fetchStatus, 1000);
+    const interval = setInterval(fetchStatus, 1500);
     return () => clearInterval(interval);
   }, [isOpen]);
 
@@ -177,6 +182,14 @@ export default function DirectBotModal({
                 <div className="w-56 h-56 bg-white p-3 rounded-2xl border-2 border-emerald-400 shadow-xl flex items-center justify-center shrink-0">
                   {status.qr ? (
                     <img src={status.qr} alt="WhatsApp QR Code" className="w-full h-full object-contain" />
+                  ) : serverError ? (
+                    <div className="flex flex-col items-center justify-center text-amber-700 gap-2 text-center p-3">
+                      <AlertTriangle className="w-8 h-8 text-amber-500 animate-pulse" />
+                      <span className="text-xs font-bold">Connecting to WhatsApp Server...</span>
+                      <p className="text-[10px] text-slate-500 leading-tight">
+                        Agar Render par <strong>Static Site</strong> hai, toh QR bot ke liye <strong>Web Service (node server.js)</strong> chahiye.
+                      </p>
+                    </div>
                   ) : (
                     <div className="flex flex-col items-center justify-center text-slate-400 gap-2 text-center p-4">
                       <Loader2 className="w-8 h-8 text-emerald-600 animate-spin" />
