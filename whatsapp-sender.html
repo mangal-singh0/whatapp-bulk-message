@@ -180,14 +180,16 @@
         const base = isDesktopApp ? 'https://api.whatsapp.com/send' : 'https://web.whatsapp.com/send';
         const url = `${base}?phone=${c.cleaned}&text=${encodeURIComponent(message)}`;
 
+        const screenW = window.screen.width || 1200;
+        const popupFeatures = `width=520,height=720,left=${Math.max(0, screenW - 540)},top=100,resizable=yes,scrollbars=yes`;
+
         let win = null;
         try {
           if (autoWindowRef.current && !autoWindowRef.current.closed) {
             autoWindowRef.current.location.href = url;
-            autoWindowRef.current.focus();
             win = autoWindowRef.current;
           } else {
-            win = window.open(url, 'WhatsAppBulkSenderWindow');
+            win = window.open(url, 'WhatsAppBulkSenderWindow', popupFeatures);
             if (win) autoWindowRef.current = win;
           }
 

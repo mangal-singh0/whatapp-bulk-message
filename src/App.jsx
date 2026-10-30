@@ -6,6 +6,7 @@ import ChatPreview from './components/ChatPreview';
 import QueueDispatcher from './components/QueueDispatcher';
 import HelpModal from './components/HelpModal';
 import AutoSendModal from './components/AutoSendModal';
+import DirectBotModal from './components/DirectBotModal';
 import { parseAndValidateNumbers } from './utils/phoneValidator';
 
 export default function App() {
@@ -47,6 +48,7 @@ export default function App() {
 
   const [isHelpOpen, setIsHelpOpen] = useState(false);
   const [isAutoModalOpen, setIsAutoModalOpen] = useState(false);
+  const [isDirectBotOpen, setIsDirectBotOpen] = useState(false);
 
   useEffect(() => {
     localStorage.setItem('wa_country_code', countryCode);
@@ -115,6 +117,7 @@ export default function App() {
         setIsDesktopApp={setIsDesktopApp}
         onOpenHelp={() => setIsHelpOpen(true)}
         onOpenAutoMode={() => setIsAutoModalOpen(true)}
+        onOpenDirectBot={() => setIsDirectBotOpen(true)}
       />
 
       {/* Main Content Workspace */}
@@ -186,6 +189,15 @@ export default function App() {
       <AutoSendModal
         isOpen={isAutoModalOpen}
         onClose={() => setIsAutoModalOpen(false)}
+      />
+
+      {/* 100% Direct WhatsApp Bot Modal (Zero Tabs, Real Delivery) */}
+      <DirectBotModal
+        isOpen={isDirectBotOpen}
+        onClose={() => setIsDirectBotOpen(false)}
+        queue={queue}
+        message={message}
+        delaySeconds={delaySeconds}
       />
     </div>
   );

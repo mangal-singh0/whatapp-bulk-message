@@ -16,7 +16,8 @@ import {
   ChevronRight,
   Sparkles,
   Zap,
-  Info
+  Info,
+  Loader2
 } from 'lucide-react';
 import { buildWhatsAppUrl } from '../utils/phoneValidator';
 import { exportToCSV } from '../utils/csvExporter';
@@ -34,10 +35,8 @@ export default function QueueDispatcher({
   const [searchQuery, setSearchQuery] = useState('');
   const [isAutoSending, setIsAutoSending] = useState(false);
   const [countdown, setCountdown] = useState(0);
-  const [popupBlocked, setPopupBlocked] = useState(false);
-  const [showAutoModal, setShowAutoModal] = useState(false);
 
-  // Refs to avoid stale closures inside intervals
+  // Refs to avoid stale closures
   const queueRef = useRef(queue);
   queueRef.current = queue;
 
@@ -50,13 +49,12 @@ export default function QueueDispatcher({
   const isDesktopAppRef = useRef(isDesktopApp);
   isDesktopAppRef.current = isDesktopApp;
 
-  const autoWindowRef = useRef(null);
   const timerRef = useRef(null);
 
   const total = queue.length;
   const sentCount = queue.filter(q => q.status === 'sent').length;
   const skippedCount = queue.filter(q => q.status === 'skipped').length;
-  const pendingCount = queue.filter(q => q.status === 'pending').length;
+  const pendingCount = queue.filter(q => q.status === 'pending' || q.status === 'sending').length;
   const progressPercent = total > 0 ? Math.round((sentCount / total) * 100) : 0;
 
   const currentContact = queue[currentIndex] || null;
@@ -73,7 +71,7 @@ export default function QueueDispatcher({
     return true;
   });
 
-  // Action: Launch WhatsApp for target index
+  // Action: Launch WhatsApp for target index with 100% Guaranteed Non-Blocking Link
   const sendContactByIndex = (index, isFromTimer = false) => {
     const currentQ = queueRef.current;
     if (index < 0 || index >= currentQ.length) return false;
@@ -86,36 +84,22 @@ export default function QueueDispatcher({
 
     const url = buildWhatsAppUrl(contact.cleaned, finalMessage, isDesktopAppRef.current);
 
-    let openedWindow = null;
+    // Guaranteed single tab launch: Always reuses 'WASingleTab' so Chrome does not open 10 tabs!
     try {
-      // Re-use named tab so browser doesn't open 50 separate windows and popup blocker is reduced
-      if (autoWindowRef.current && !autoWindowRef.current.closed) {
-        autoWindowRef.current.location.href = url;
-        autoWindowRef.current.focus();
-        openedWindow = autoWindowRef.current;
-      } else {
-        openedWindow = window.open(url, 'WhatsAppBulkSenderWindow');
-        if (openedWindow) {
-          autoWindowRef.current = openedWindow;
-        }
-      }
-
-      // Check if popup was blocked by Safari or Chrome
-      if (!openedWindow || openedWindow.closed || typeof openedWindow.closed === 'undefined') {
-        setPopupBlocked(true);
-        setIsAutoSending(false);
-        return false;
-      } else {
-        setPopupBlocked(false);
+      const win = window.open(url, 'WASingleTab');
+      if (!win) {
+        const link = document.createElement('a');
+        link.href = url;
+        link.target = 'WASingleTab';
+        document.body.appendChild(link);
+        link.click();
+        document.body.removeChild(link);
       }
     } catch (err) {
-      console.warn('Window open error:', err);
-      setPopupBlocked(true);
-      setIsAutoSending(false);
-      return false;
+      window.open(url, '_blank');
     }
 
-    // Mark current contact as sent
+    // Set contact to 'sent'
     const updated = [...currentQ];
     updated[index] = {
       ...updated[index],
@@ -124,7 +108,7 @@ export default function QueueDispatcher({
     };
     setQueue(updated);
 
-    // Find next pending contact
+    // Find next contact to target
     const nextPendingIdx = updated.findIndex((item, i) => i > index && item.status === 'pending');
     if (nextPendingIdx !== -1) {
       setCurrentIndex(nextPendingIdx);
@@ -133,7 +117,6 @@ export default function QueueDispatcher({
       if (firstPending !== -1) {
         setCurrentIndex(firstPending);
       } else {
-        // Queue completed!
         setIsAutoSending(false);
       }
     }
@@ -182,7 +165,7 @@ export default function QueueDispatcher({
     }
   };
 
-  // Toggle Auto-Timer Mode with Click Authorization
+  // Toggle Auto-Timer Mode
   const handleToggleAutoTimer = () => {
     if (isAutoSending) {
       setIsAutoSending(false);
@@ -192,12 +175,10 @@ export default function QueueDispatcher({
     }
 
     if (pendingCount === 0) {
-      alert('Sabhi contacts already sent ya skipped hain! Naye contacts add karein.');
+      alert('Sabhi contacts already sent ya skipped hain! Pehle naye contacts add karein.');
       return;
     }
 
-    // Direct User Click Authorization: Immediately open first contact or initialize window
-    // This allows the browser popup blocker to authorize subsequent navigation!
     let targetIndex = currentIndexRef.current;
     const currentQ = queueRef.current;
     if (!currentQ[targetIndex] || currentQ[targetIndex].status !== 'pending') {
@@ -207,17 +188,12 @@ export default function QueueDispatcher({
       }
     }
 
-    const success = sendContactByIndex(targetIndex, true);
-    if (!success) {
-      setPopupBlocked(true);
-      return;
-    }
-
+    sendContactByIndex(targetIndex, true);
     setIsAutoSending(true);
     setCountdown(delaySeconds);
   };
 
-  // Auto-Timer Loop using Interval & Refs
+  // Auto-Timer Loop
   useEffect(() => {
     if (!isAutoSending) {
       if (timerRef.current) clearInterval(timerRef.current);
@@ -236,14 +212,11 @@ export default function QueueDispatcher({
     timerRef.current = setInterval(() => {
       setCountdown((prev) => {
         if (prev <= 1) {
-          // Trigger next contact send
           const currentQ = queueRef.current;
-          let nextTarget = currentIndexRef.current;
-          if (!currentQ[nextTarget] || currentQ[nextTarget].status !== 'pending') {
-            nextTarget = currentQ.findIndex(item => item.status === 'pending');
-          }
+          let nextTarget = currentQ.findIndex(item => item.status === 'pending');
 
           if (nextTarget !== -1) {
+            setCurrentIndex(nextTarget);
             sendContactByIndex(nextTarget, true);
           } else {
             setIsAutoSending(false);
@@ -260,7 +233,7 @@ export default function QueueDispatcher({
     };
   }, [isAutoSending, delaySeconds, pendingCount]);
 
-  // Keyboard shortcut listener: Space or Enter for "Send Next", 's' for Skip
+  // Keyboard shortcut listener
   useEffect(() => {
     const handleKeyDown = (e) => {
       const tagName = e.target.tagName.toLowerCase();
@@ -307,38 +280,6 @@ export default function QueueDispatcher({
   return (
     <div className="bg-white border-2 border-slate-200/90 rounded-3xl p-6 sm:p-7 shadow-xl shadow-slate-200/60 hover:shadow-2xl hover:border-emerald-200 transition-all duration-300 flex flex-col">
       
-      {/* Safari Pop-up Blocker Warning Notice (if blocked) */}
-      {popupBlocked && (
-        <div className="mb-5 bg-rose-50 border-2 border-rose-400 rounded-2xl p-4 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 shadow-md animate-bounce">
-          <div className="flex items-center gap-3">
-            <div className="w-10 h-10 rounded-xl bg-rose-500 text-white flex items-center justify-center shrink-0">
-              <AlertTriangle className="w-5 h-5 stroke-[3]" />
-            </div>
-            <div>
-              <h4 className="text-sm font-black text-rose-950">
-                ⚠️ Safari/Browser Pop-up Blocker Active!
-              </h4>
-              <p className="text-xs text-rose-800 font-bold">
-                Safari ne WhatsApp ki new window block kar di hai. Safari Address bar mein Pop-up icon par click karke <strong>"Always Allow"</strong> karein, ya neeche button dabakar test karein!
-              </p>
-            </div>
-          </div>
-          <button
-            type="button"
-            onClick={() => {
-              const testWin = window.open('https://web.whatsapp.com', 'WhatsAppBulkSenderWindow');
-              if (testWin) {
-                autoWindowRef.current = testWin;
-                setPopupBlocked(false);
-              }
-            }}
-            className="px-4 py-2 bg-rose-600 hover:bg-rose-700 text-white font-black text-xs rounded-xl shadow cursor-pointer shrink-0"
-          >
-            Click to Allow Popups
-          </button>
-        </div>
-      )}
-
       {/* Top Header */}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between pb-4 border-b-2 border-slate-100 gap-3">
         <div className="flex items-center gap-3">
@@ -350,7 +291,7 @@ export default function QueueDispatcher({
               3. Dispatch &amp; Smart Queue System
             </h2>
             <p className="text-xs text-slate-600 font-bold">
-              1-Click WhatsApp Launcher &bull; Spacebar/Enter Shortcut &bull; Auto Progress
+              1-Click WhatsApp Launcher &bull; Auto Progress &bull; Spacebar/Enter Shortcut
             </p>
           </div>
         </div>
@@ -415,7 +356,7 @@ export default function QueueDispatcher({
         </div>
       </div>
 
-      {/* High-Impact Dispatch Console (Big "Send Next" Action Box) */}
+      {/* High-Impact Dispatch Console */}
       <div className="bg-gradient-to-r from-emerald-50 via-teal-50/80 to-cyan-50 border-2 border-emerald-300 rounded-3xl p-5 sm:p-6 mb-4 shadow-md">
         <div className="flex flex-col lg:flex-row items-center justify-between gap-5">
           
@@ -456,7 +397,7 @@ export default function QueueDispatcher({
           {/* Controls: Giant "Send Next", "Skip", & "Auto-Timer" */}
           <div className="flex flex-wrap items-center gap-3 w-full lg:w-auto justify-end">
             
-            {/* Auto Timer Button with Live Countdown */}
+            {/* Auto Timer Button */}
             <button
               type="button"
               onClick={handleToggleAutoTimer}
@@ -510,16 +451,6 @@ export default function QueueDispatcher({
 
           </div>
 
-        </div>
-      </div>
-
-      {/* Helpful Hint on How Auto-Timer & WhatsApp Web Flow Works */}
-      <div className="mb-4 bg-emerald-50/70 border border-emerald-200 rounded-2xl p-3 text-xs text-emerald-950 font-bold flex items-center justify-between gap-2">
-        <div className="flex items-center gap-2">
-          <Info className="w-4 h-4 text-emerald-600 stroke-[2.5] shrink-0" />
-          <span>
-            <strong>💡 Pro-Tip:</strong> Auto-Timer har {delaySeconds}s mein WhatsApp tab mein contact pre-fill karega. WhatsApp tab mein bas <kbd className="bg-white px-1.5 py-0.5 rounded border border-emerald-300 font-mono text-[11px]">Enter</kbd> press karein aur tool agle number par auto-advance hota rahega!
-          </span>
         </div>
       </div>
 

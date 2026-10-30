@@ -25,3 +25,6 @@ lerna-debug.log*
 .DS_Store
 Thumbs.db
 
+# WhatsApp Session Auth Info
+baileys_auth_info/
+

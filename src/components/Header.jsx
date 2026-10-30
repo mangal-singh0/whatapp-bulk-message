@@ -18,7 +18,8 @@ export default function Header({
   isDesktopApp,
   setIsDesktopApp,
   onOpenHelp,
-  onOpenAutoMode
+  onOpenAutoMode,
+  onOpenDirectBot
 }) {
   const commonCountryCodes = [
     { code: '91', label: '🇮🇳 India (+91)' },
@@ -66,15 +67,15 @@ export default function Header({
           {/* Quick Settings Bar with Bold, High-Contrast Colorful Buttons */}
           <div className="flex flex-wrap items-center gap-2 sm:gap-2.5 text-xs">
             
-            {/* 100% Hands-Free Auto Mode Button */}
+            {/* 100% Guaranteed Direct Bot Button */}
             <button
               type="button"
-              onClick={onOpenAutoMode}
-              className="flex items-center gap-1.5 bg-gradient-to-r from-amber-500 via-orange-500 to-amber-500 hover:from-amber-600 hover:to-orange-600 text-white font-black px-3.5 py-2 rounded-xl transition-all shadow-md shadow-orange-500/25 hover:scale-105 active:scale-95 cursor-pointer text-xs animate-pulse"
-              title="Activate 100% Zero-Click Automatic Sending"
+              onClick={onOpenDirectBot}
+              className="flex items-center gap-1.5 bg-gradient-to-r from-emerald-600 via-teal-600 to-cyan-600 hover:from-emerald-500 hover:to-cyan-500 text-white font-black px-4 py-2 rounded-xl transition-all shadow-lg shadow-emerald-500/30 hover:scale-105 active:scale-95 cursor-pointer text-xs animate-button-glow border-2 border-emerald-300"
+              title="100% Guaranteed Direct WhatsApp Engine (Zero Tabs, Real Delivery)"
             >
-              <Bot className="w-4 h-4 stroke-[2.5]" />
-              <span>100% Auto-Send Setup</span>
+              <Zap className="w-4 h-4 fill-amber-300 text-amber-300" />
+              <span>⚡ 100% Direct Send (Zero Tabs)</span>
             </button>
 
             {/* Country Code Picker */}
@@ -105,11 +106,10 @@ export default function Header({
                 onChange={(e) => setDelaySeconds(Number(e.target.value))}
                 className="bg-transparent text-amber-800 font-extrabold focus:outline-none cursor-pointer text-xs"
               >
-                <option value={3} className="bg-white text-slate-900 font-bold">3 Seconds (Fast)</option>
-                <option value={5} className="bg-white text-slate-900 font-bold">5 Seconds (Safe)</option>
-                <option value={8} className="bg-white text-slate-900 font-bold">8 Seconds</option>
-                <option value={10} className="bg-white text-slate-900 font-bold">10 Seconds (Anti-Ban)</option>
-                <option value={15} className="bg-white text-slate-900 font-bold">15 Seconds</option>
+                <option value={6} className="bg-white text-slate-900 font-bold">6 Seconds (Fast)</option>
+                <option value={8} className="bg-white text-slate-900 font-bold">8 Seconds (Recommended)</option>
+                <option value={10} className="bg-white text-slate-900 font-bold">10 Seconds (Safe)</option>
+                <option value={15} className="bg-white text-slate-900 font-bold">15 Seconds (Anti-Ban)</option>
               </select>
             </div>
 
